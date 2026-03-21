@@ -50,6 +50,14 @@
             </select>
         </div>
 
+        <div class="monitor-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; font-size: 14px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px;">Live Nodes Monitor</h3>
+        </div>
+        <div id="nodes-status-container" class="nodes-grid"></div>
+
+        <div class="table-header" style="margin-bottom: 12px;">
+            <h3 style="margin: 0; font-size: 14px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px;">Calls History</h3>
+        </div>
 
         <div class="table-container">
             <table>
@@ -144,10 +152,19 @@
             try {
                 const res = await fetch('/data');
                 const response = await res.json();
-                const data = response.calls;
+                const data = response.calls.reverse(); // Più recenti all'inizio
                 const serverTime = response.server_time;
                 const localTime = Date.now() / 1000;
                 const serverOffset = serverTime - localTime;
+
+                const escapeHtml = (unsafe) => {
+                    return (unsafe || "").toString()
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#039;");
+                };
 
                 // Estrai valori unici per le dropdown
                 const nodes = new Set();
@@ -164,10 +181,75 @@
                 updateDropdown('tg-filter', tgs, currentTG, 'TG');
                 updateDropdown('name-filter', names, currentName, 'NAME');
 
+                // Aggiorna il monitor dei nodi live
+                const nodesStatusContainer = document.getElementById("nodes-status-container");
+                const nodesMap = new Map();
+                
+                // Raccogli l'ultimo stato per ogni nodo
+                data.forEach(call => {
+                    const nodeName = (call.NODO || "N/A").toUpperCase();
+                    if (!nodesMap.has(nodeName)) {
+                        nodesMap.set(nodeName, call);
+                    }
+                });
+
+                // Cancella e ricostruisci il monitor dei nodi
+                nodesStatusContainer.innerHTML = "";
+                
+                // Ordina i nodi alfabeticamente
+                const sortedNodes = Array.from(nodesMap.keys()).sort();
+                
+                sortedNodes.forEach(nodeName => {
+                    const lastCall = nodesMap.get(nodeName);
+                    const isTX = lastCall.TIME === "";
+                    
+                    const card = document.createElement("div");
+                    card.className = `node-card ${isTX ? 'tx' : ''}`;
+                    
+                    // Calcolo durata live se in TX
+                    let displayDuration = "";
+                    if (isTX && lastCall.start_ts) {
+                        const currentServerTime = (Date.now() / 1000) + serverOffset;
+                        let diff = Math.floor(currentServerTime - lastCall.start_ts);
+                        if (diff < 0) diff = 0;
+                        displayDuration = diff + "s";
+                    } else {
+                        displayDuration = lastCall.TIME ? lastCall.TIME + "s" : "-";
+                        if (displayDuration.includes("!")) displayDuration = displayDuration.replace("!", "") + "!";
+                    }
+
+                    card.innerHTML = `
+                        <div class="node-header">
+                            <span class="node-name">${escapeHtml(nodeName)}</span>
+                            <span class="node-status-badge ${isTX ? 'status-tx' : 'status-idle'}">${isTX ? 'Transmitting' : 'Idle'}</span>
+                        </div>
+                        <div class="node-body">
+                            <div class="node-info-row">
+                                <span class="node-label">Operator:</span>
+                                <span class="node-value callsign">${escapeHtml(lastCall.ID)}</span>
+                            </div>
+                            <div class="node-info-row">
+                                <span class="node-label">Name:</span>
+                                <span class="node-value">${escapeHtml(lastCall.NAME)}</span>
+                            </div>
+                            <div class="node-info-row">
+                                <span class="node-label">Target:</span>
+                                <span class="node-value">${escapeHtml(lastCall.TG)}</span>
+                            </div>
+                            <div class="node-info-row">
+                                <span class="node-label">Mode:</span>
+                                <span class="node-value">${escapeHtml(lastCall.MODE)}</span>
+                            </div>
+                        </div>
+                        <div class="node-timer">${displayDuration}</div>
+                    `;
+                    nodesStatusContainer.appendChild(card);
+                });
+
                 const tbody = document.getElementById("table-body");
                 tbody.innerHTML = "";
 
-                data.reverse().forEach(call => {
+                data.forEach(call => {
                     // Filtri combinati
                     const modeMatch = currentMode === "all" || call.MODE.toLowerCase() === currentMode;
                     const nodeMatch = currentNode === "all" || (call.NODO && call.NODO.toUpperCase() === currentNode);
@@ -184,15 +266,6 @@
 
                         let fromClass = call.FROM === "RF" ? "badge rf" : "badge netw";
                         let slotClass = call.SLOT === "1" ? "badge slot1" : "badge slot2";
-
-                        const escapeHtml = (unsafe) => {
-                            return (unsafe || "").toString()
-                                .replace(/&/g, "&amp;")
-                                .replace(/</g, "&lt;")
-                                .replace(/>/g, "&gt;")
-                                .replace(/"/g, "&quot;")
-                                .replace(/'/g, "&#039;");
-                        };
 
                         let modeClass = call.MODE ? ("badge mode-" + escapeHtml(call.MODE).toLowerCase()) : "";
 
