@@ -47,6 +47,13 @@ def init_db():
         # Le colonne esistono già
         pass
 
+    # Migrazione per database esistenti senza colonna source_ext
+    try:
+        c.execute("ALTER TABLE calls ADD COLUMN source_ext TEXT")
+        print("DEBUG: Colonna source_ext aggiunta alla tabella calls.")
+    except sqlite3.OperationalError:
+        pass
+
     # Tabelle anagrafica
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (radio_id TEXT PRIMARY KEY, callsign TEXT, name TEXT, city TEXT, country TEXT)''')
@@ -210,12 +217,13 @@ def save_or_update_call(call_data):
     else:
         # Nuova chiamata
         c.execute('''INSERT INTO calls 
-                     (from_type, id_raw, callsign, name, city, country, tg, mode, slot, nodo, ber, data, orario, start_ts, duration)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                     (from_type, id_raw, callsign, name, city, country, tg, mode, slot, nodo, ber, data, orario, start_ts, duration, source_ext)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                   (call_data["FROM"], call_data["id_raw"], call_data["ID"], call_data["NAME"], 
                    call_data.get("CITY", ""), call_data.get("COUNTRY", ""),
                    call_data["TG"], call_data["MODE"], call_data["SLOT"], call_data["NODO"],
-                   call_data["BER"], call_data["DATA"], call_data["ORARIO"], call_data["start_ts"], ""))
+                   call_data["BER"], call_data["DATA"], call_data["ORARIO"], call_data["start_ts"], "",
+                   call_data.get("SOURCE_EXT", "")))
     
     conn.commit()
     conn.close()
@@ -223,7 +231,7 @@ def save_or_update_call(call_data):
 def get_recent_calls(limit=40):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''SELECT from_type, id_raw, callsign, name, city, country, tg, mode, slot, nodo, ber, data, orario, duration, start_ts 
+    c.execute('''SELECT from_type, id_raw, callsign, name, city, country, tg, mode, slot, nodo, ber, data, orario, duration, start_ts, source_ext 
                  FROM calls ORDER BY id DESC LIMIT ?''', (limit,))
     rows = c.fetchall()
     conn.close()
@@ -235,7 +243,7 @@ def get_recent_calls(limit=40):
             "CITY": r[4], "COUNTRY": r[5],
             "TG": r[6], "MODE": r[7], "SLOT": r[8], "NODO": r[9],
             "BER": r[10], "DATA": r[11], "ORARIO": r[12], "TIME": r[13],
-            "start_ts": r[14]
+            "start_ts": r[14], "SOURCE_EXT": r[15] or ""
         })
     return results
 
@@ -289,6 +297,9 @@ def on_message(client, userdata, msg):
             tg_label = tg_map.get(tg_id, "")
             target = f"{tg_id} ({tg_label})" if tg_label else tg_id
 
+            # Estrai source_ext solo per D-STAR
+            source_ext = data.get("source_ext", "") if mode.upper() == "D-STAR" else ""
+
             new_call = {
                 "FROM": data.get("source", "NET").upper(),
                 "id_raw": uid,
@@ -304,7 +315,8 @@ def on_message(client, userdata, msg):
                 "DATA": time.strftime("%d-%m-%Y"),
                 "ORARIO": time.strftime("%H:%M:%S"),
                 "TIME": "",
-                "start_ts": now_ts
+                "start_ts": now_ts,
+                "SOURCE_EXT": source_ext
             }
             
             with calls_lock:
