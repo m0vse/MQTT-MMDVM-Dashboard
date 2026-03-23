@@ -378,7 +378,7 @@
                         <div class="node-body">
                             <div class="node-info-row">
                                 <span class="node-label">Operator:</span>
-                                <span class="node-value callsign">${escapeHtml(lastCall.ID)}</span>
+                                <span class="node-value callsign">${escapeHtml(lastCall.ID)}${(lastCall.MODE && lastCall.MODE.toUpperCase() === 'D-STAR' && lastCall.SOURCE_EXT) ? ' <span style="color: #14b8a6; font-size: 11px;">' + escapeHtml(lastCall.SOURCE_EXT) + '</span>' : ''}</span>
                             </div>
                             <div class="node-info-row">
                                 <span class="node-label">Name:</span>
@@ -477,9 +477,10 @@
                         }
 
                         const isNumericId = /^\d+$/.test(call.ID);
+                        const extSuffix = (call.MODE && call.MODE.toUpperCase() === 'D-STAR' && call.SOURCE_EXT) ? ` <span style="color: #14b8a6; font-size: 11px; font-weight: 700;">${escapeHtml(call.SOURCE_EXT)}</span>` : '';
                         const idContent = isNumericId ?
-                            escapeHtml(call.ID) :
-                            `<a href="https://www.qrz.com/db/${escapeHtml(call.ID)}" target="_blank" rel="noopener noreferrer" class="qrz-link">${escapeHtml(call.ID)}</a>`;
+                            escapeHtml(call.ID) + extSuffix :
+                            `<a href="https://www.qrz.com/db/${escapeHtml(call.ID)}" target="_blank" rel="noopener noreferrer" class="qrz-link">${escapeHtml(call.ID)}</a>${extSuffix}`;
 
                         let locationStr = (call.CITY && call.COUNTRY) ? `${call.CITY}, ${call.COUNTRY}` : (call.COUNTRY || "");
                         let locationLink = locationStr ? `https://www.google.com/maps/search/${encodeURIComponent(locationStr)}` : "#";
