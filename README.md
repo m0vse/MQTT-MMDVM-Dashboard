@@ -1,4 +1,4 @@
-Dashboard for MMDVM using MQTT protocol developed by FreeDMR IT Dev Team.
+Dashboard for MMDVM using MQTT protocol
 
 This project uses Jonathan G4KLX's latest implementations of the MMDVM suite.
 
@@ -9,3 +9,6 @@ Topic must be in the format mmdvm/[nodename] for MMDVMHost.ini
 For [MODE]Gateway.ini, topic format must be: [mode]-gateway/[nodename]
 
 You can find an example here: http://mqtt.freedmr.it:7000
+
+developed by FreeDMR IT Dev Team.
+
