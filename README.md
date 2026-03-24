@@ -1,4 +1,4 @@
-Dashboard for MMDVM using MQTT protocol developed by FReeDMR IT Dev Team.
+Dashboard for MMDVM using MQTT protocol developed by FreeDMR IT Dev Team.
 
 This project uses Jonathan G4KLX's latest implementations of the MMDVM suite.
 
