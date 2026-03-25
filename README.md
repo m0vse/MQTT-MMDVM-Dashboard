@@ -112,5 +112,6 @@ SECURITY
 - File paths are managed robustly using Python's pathlib library.
 
 
-© 2026  FreeDMR Italia - Developed by FreeDMR-IT Dev Team 2026
+© 2026  FreeDMR Italia - 
+Developed by FreeDMR-IT Dev Team
 ==============================================================
