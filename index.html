@@ -32,31 +32,41 @@
     </header>
 
     <main>
-        <div class="tabs-nav">
-            <button class="tab-btn active" data-tab="live">Monitor Live</button>
-            <button class="tab-btn" data-tab="stats">Analytics & Map</button>
+        <div class="main-nav-bar">
+            <div class="nav-group">
+                <button class="tab-btn active" data-tab="live">Monitor Live</button>
+                <button class="tab-btn" data-tab="gateway">Gateway Status</button>
+                <button class="tab-btn" data-tab="stats">Analytics & Map</button>
+            </div>
+            <div class="nav-divider"></div>
+            <div class="nav-group source-group">
+                <button class="source-tab-btn active" data-source="all">ALL SOURCES</button>
+                <button class="source-tab-btn" data-source="MMDVM">MMDVM</button>
+                <button class="source-tab-btn" data-source="GATEWAY">GATEWAY</button>
+            </div>
         </div>
 
-        <div class="filters">
-            <button class="filter-btn active" data-mode="all">ALL</button>
-            <button class="filter-btn" data-mode="dmr">DMR</button>
-            <button class="filter-btn" data-mode="ysf">YSF</button>
-            <button class="filter-btn" data-mode="nxdn">NXDN</button>
-            <button class="filter-btn" data-mode="p25">P25</button>
-            <button class="filter-btn" data-mode="d-star">D-STAR</button>
-        </div>
+        <div class="filter-row">
+            <div class="filters mode-filters">
+                <button class="filter-btn active" data-mode="all">ALL</button>
+                <button class="filter-btn" data-mode="dmr">DMR</button>
+                <button class="filter-btn" data-mode="ysf">YSF</button>
+                <button class="filter-btn" data-mode="nxdn">NXDN</button>
+                <button class="filter-btn" data-mode="p25">P25</button>
+                <button class="filter-btn" data-mode="d-star">D-STAR</button>
+            </div>
 
-
-        <div class="filters dropdown-filters">
-            <select id="node-filter">
-                <option value="all">NODO: ALL</option>
-            </select>
-            <select id="tg-filter">
-                <option value="all">TG: ALL</option>
-            </select>
-            <select id="name-filter">
-                <option value="all">NAME: ALL</option>
-            </select>
+            <div class="filters dropdown-filters">
+                <select id="node-filter">
+                    <option value="all">NODO: ALL</option>
+                </select>
+                <select id="tg-filter">
+                    <option value="all">TG: ALL</option>
+                </select>
+                <select id="name-filter">
+                    <option value="all">NAME: ALL</option>
+                </select>
+            </div>
         </div>
 
         <div id="tab-live" class="tab-pane active">
@@ -73,8 +83,8 @@
                 <h3
                     style="margin: 0; font-size: 14px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px;">
                     Calls History</h3>
-                <button id="clear-history" class="filter-btn" style="border-color: #ef4444; color: #ef4444;">Clear
-                    History</button>
+                <!-- <button id="clear-history" class="filter-btn" style="border-color: #ef4444; color: #ef4444;">Clear
+                    History</button>-->
             </div>
 
             <div class="table-container">
@@ -82,6 +92,7 @@
                     <thead>
                         <tr>
                             <th class="small">FROM</th>
+                            <th>SRC</th>
                             <th>MODE</th>
                             <th>ID</th>
                             <th>NAME</th>
@@ -97,6 +108,13 @@
                     <tbody id="table-body"></tbody>
                 </table>
             </div>
+        </div>
+
+        <div id="tab-gateway" class="tab-pane">
+            <h3 style="margin: 0 0 20px 0; font-size: 14px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px;">
+                Gateway Link Status</h3>
+            <div id="gateway-grid" class="gateway-grid"></div>
+            <div id="gateway-log" class="gateway-log"></div>
         </div>
 
         <div id="tab-stats" class="tab-pane">
@@ -142,6 +160,7 @@
         }
 
         let currentMode = "all";
+        let currentSource = "all";
         let currentNode = "all";
         let currentTG = "all";
         let currentName = "all";
@@ -149,7 +168,7 @@
         let modeChart, tgChart, map, markersLayer;
         let lastMapCallId = null;
         let lastServerOffset = 0;
-        let activeTimers = []; // [{start_ts, nodeTimerEl, rowTimerEl}]
+        let activeTimers = [];
 
         const countryCoords = {
             "Italy": [41.9, 12.5], "Germany": [51.1, 10.4], "France": [46.2, 2.2],
@@ -383,6 +402,15 @@
             });
         });
 
+        document.querySelectorAll('.source-tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.source-tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentSource = btn.getAttribute('data-source');
+                loadData();
+            });
+        });
+
         // Event listeners per le nuove dropdown
         document.getElementById('node-filter').addEventListener('change', (e) => {
             currentNode = e.target.value;
@@ -410,12 +438,12 @@
             loadData();
         });
 
-        document.getElementById('clear-history').addEventListener('click', async () => {
-            if (confirm("Are you sure you want to clear the history?")) {
-                await fetch('/clear', { method: 'POST' });
-                loadData();
-            }
-        });
+        //document.getElementById('clear-history').addEventListener('click', async () => {
+        //    if (confirm("Are you sure you want to clear the history?")) {
+        //        await fetch('/clear', { method: 'POST' });
+        //        loadData();
+        //    }
+        //});
 
         // Gestione Tab
         document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -427,15 +455,27 @@
                 const tabId = "tab-" + btn.dataset.tab;
                 document.getElementById(tabId).classList.add('active');
 
-                // Disabilita filtri se siamo in Analytics & Map
+                // Disabilita filtri se siamo in Analytics & Map o Gateway
                 const isStats = btn.dataset.tab === 'stats';
+                const isGateway = btn.dataset.tab === 'gateway';
+                const disableFilters = isStats || isGateway;
                 document.querySelectorAll('.filters .filter-btn[data-mode]').forEach(b => {
-                    b.classList.toggle('disabled', isStats);
+                    b.classList.toggle('disabled', disableFilters);
                 });
                 document.querySelectorAll('.dropdown-filters select').forEach(s => {
-                    s.classList.toggle('disabled', isStats);
-                    s.disabled = isStats;
+                    s.classList.toggle('disabled', disableFilters);
+                    s.disabled = disableFilters;
                 });
+                // Gestione visibilità selettore sorgenti (ora in nav-bar)
+                const sourceGroup = document.querySelector('.source-group');
+                const navDivider = document.querySelector('.nav-divider');
+                if (sourceGroup) {
+                    sourceGroup.style.opacity = disableFilters ? '0.3' : '1';
+                    sourceGroup.style.pointerEvents = disableFilters ? 'none' : 'auto';
+                }
+                if (navDivider) {
+                    navDivider.style.opacity = disableFilters ? '0.3' : '1';
+                }
 
                 if (isStats && map) {
                     setTimeout(() => map.invalidateSize(), 100);
@@ -518,7 +558,7 @@
             let rowClass = "";
             if (isTX) rowClass += " active";
             let isNew = (Date.now() / 1000) - call.start_ts < 3;
-            if (isNew) rowClass += " new-row";
+            if (isNew) rowClass += " new-row-highlight";
 
             let fromClass = call.FROM === "RF" ? "badge rf" : "badge netw";
             let slotClass = call.SLOT === "1" ? "badge slot1" : "badge slot2";
@@ -554,24 +594,27 @@
             let locationLink = locationStr ? `https://www.google.com/maps/search/${encodeURIComponent(locationStr)}` : "#";
 
             const startTsAttr = isTX ? ` data-start-ts="${call.start_ts}"` : '';
+            const sourceBadgeClass = call.SOURCE_TYPE === 'GATEWAY' ? 'gateway' : 'mmdvm';
+            const sourceBadgeText = call.SOURCE_TYPE === 'GATEWAY' ? 'GW' : 'MM';
 
             return `<tr class="${rowClass.trim()}"${startTsAttr}>
-                    <td><span class="${fromClass}">${escapeHtml(call.FROM)}</span></td>
-                    <td><span class="${modeClass}">${escapeHtml(call.MODE || "DMR")}</span></td>
-                    <td class="id-cell">${idContent}</td>
-                    <td class="name-cell">
+                    <td data-label="FROM"><span class="${fromClass}">${escapeHtml(call.FROM)}</span></td>
+                    <td data-label="SRC"><span class="source-badge ${sourceBadgeClass}">${sourceBadgeText}</span></td>
+                    <td data-label="MODE"><span class="${modeClass}">${escapeHtml(call.MODE || "DMR")}</span></td>
+                    <td data-label="ID" class="id-cell">${idContent}</td>
+                    <td data-label="NAME" class="name-cell">
                         <div style="font-weight: 600;">${escapeHtml(call.NAME)}</div>
                         <div style="font-size: 10px; color: var(--text-secondary);">
                             <a href="${locationLink}" target="_blank" style="color: inherit; text-decoration: none;">📍 ${escapeHtml(locationStr)}</a>
                         </div>
                     </td>
-                    <td class="tg">${escapeHtml(call.TG)}</td>
-                    <td class="nodo-cell">${escapeHtml(call.NODO).toUpperCase()}</td>
-                    <td class="${berClass}">${escapeHtml(call.BER)}</td>
-                    <td>${escapeHtml(call.DATA)}</td>
-                    <td>${escapeHtml(call.ORARIO)}</td>
-                    <td><span class="${slotClass}">TS ${escapeHtml(call.SLOT)}</span></td>
-                    <td class="time-cell">${displayTime}</td>
+                    <td data-label="TG" class="tg">${escapeHtml(call.TG)}</td>
+                    <td data-label="NODO" class="nodo-cell">${escapeHtml(call.NODO).toUpperCase()}</td>
+                    <td data-label="BER" class="${berClass}">${escapeHtml(call.BER)}</td>
+                    <td data-label="DATE">${escapeHtml(call.DATA)}</td>
+                    <td data-label="TIME">${escapeHtml(call.ORARIO)}</td>
+                    <td data-label="SLOT"><span class="${slotClass}">TS ${escapeHtml(call.SLOT)}</span></td>
+                    <td data-label="DUR" class="time-cell">${displayTime}</td>
                 </tr>`;
         }
 
@@ -588,7 +631,7 @@
                 lastServerOffset = serverTime - localTime;
 
                 // Crea uno snapshot per confronto (dati + filtri attivi)
-                const dataSnapshot = JSON.stringify(data) + `|${currentMode}|${currentNode}|${currentTG}|${currentName}`;
+                const dataSnapshot = JSON.stringify(data) + `|${currentSource}|${currentMode}|${currentNode}|${currentTG}|${currentName}`;
                 const dataChanged = dataSnapshot !== lastDataSnapshot;
                 lastDataSnapshot = dataSnapshot;
 
@@ -617,17 +660,27 @@
                     const nodesMap = new Map();
 
                     data.forEach(call => {
-                        const nodeName = (call.NODO || "N/A").toUpperCase();
-                        if (!nodesMap.has(nodeName)) {
-                            nodesMap.set(nodeName, call);
+                        const sourceMatch = currentSource === "all" || call.SOURCE_TYPE === currentSource;
+                        if (!sourceMatch) return;
+                        
+                        let nodeKey = (call.NODO || "N/A").toUpperCase();
+                        if (call.MODE && call.MODE.toUpperCase() === 'DMR') {
+                            const slot = call.SLOT || "1";
+                            nodeKey += `_TS${slot}`;
+                        }
+
+                        if (!nodesMap.has(nodeKey)) {
+                            nodesMap.set(nodeKey, call);
                         }
                     });
 
                     const sortedNodes = Array.from(nodesMap.keys()).sort();
                     let nodesHtml = "";
-                    sortedNodes.forEach(nodeName => {
+                    sortedNodes.forEach(nodeKey => {
+                        const call = nodesMap.get(nodeKey);
+                        const nodeName = (call.NODO || "N/A").toUpperCase();
                         if (currentNode !== "all" && nodeName !== currentNode) return;
-                        nodesHtml += buildNodeCardHtml(nodeName, nodesMap.get(nodeName), lastServerOffset);
+                        nodesHtml += buildNodeCardHtml(nodeName, call, lastServerOffset);
                     });
                     nodesStatusContainer.innerHTML = nodesHtml;
 
@@ -636,12 +689,13 @@
                     let tableHtml = "";
 
                     data.forEach(call => {
+                        const sourceMatch = currentSource === "all" || call.SOURCE_TYPE === currentSource;
                         const modeMatch = currentMode === "all" || call.MODE.toLowerCase() === currentMode;
                         const nodeMatch = currentNode === "all" || (call.NODO && call.NODO.toUpperCase() === currentNode);
                         const tgMatch = currentTG === "all" || call.TG === currentTG;
                         const nameMatch = currentName === "all" || call.NAME === currentName;
 
-                        if (modeMatch && nodeMatch && tgMatch && nameMatch) {
+                        if (sourceMatch && modeMatch && nodeMatch && tgMatch && nameMatch) {
                             tableHtml += buildRowHtml(call, lastServerOffset);
                         }
                     });
@@ -700,9 +754,131 @@
             });
         }
 
+        // Gestione Gateway Status
+        let lastGatewayData = "";
+
+        async function loadGatewayStatus() {
+            try {
+                const res = await fetch('/gateway_status');
+                const response = await res.json();
+                const gateways = response.gateways || [];
+                
+                const dataSnapshot = JSON.stringify(gateways);
+                if (dataSnapshot === lastGatewayData) return;
+                lastGatewayData = dataSnapshot;
+
+                const grid = document.getElementById('gateway-grid');
+                const log = document.getElementById('gateway-log');
+
+                if (gateways.length === 0) {
+                    grid.innerHTML = '<p style="color: var(--text-secondary); text-align: center;">Nessun gateway rilevato. I dati arriveranno quando i gateway invieranno messaggi di stato.</p>';
+                    log.innerHTML = '';
+                    return;
+                }
+
+                // Ordina per tipo e nome
+                const sortedGateways = [...gateways].sort((a, b) => {
+                    if (a.type !== b.type) return a.type.localeCompare(b.type);
+                    return a.node.localeCompare(b.node);
+                });
+
+                // Genera card
+                let gridHtml = '';
+                sortedGateways.forEach(gw => {
+                    const typeClass = gw.type.toLowerCase();
+                    const actionClass = gw.action || 'unknown';
+                    const statusClass = actionClass === 'linked' ? 'linked' : 
+                                       actionClass === 'linking' ? 'linking' :
+                                       actionClass === 'online' ? 'online' : 'unlinked';
+                    
+                    const actionLabel = gw.action === 'linking' ? 'Linking...' :
+                                       gw.action === 'linked' ? 'Linked' :
+                                       gw.action === 'failed' ? 'Failed' :
+                                       gw.action === 'online' ? 'Online' : 'Disconnected';
+                    
+                    const targetLabel = gw.talkgroup || gw.repeater || '-';
+                    const reasonLabel = gw.reason || '-';
+                    
+                    let timestampLabel = '-';
+                    if (gw.timestamp) {
+                        try {
+                            const ts = new Date(gw.timestamp);
+                            timestampLabel = ts.toLocaleString('it-IT');
+                        } catch(e) {
+                            timestampLabel = gw.timestamp;
+                        }
+                    }
+
+                    gridHtml += `
+                        <div class="gateway-card">
+                            <div class="gateway-header">
+                                <span class="gateway-type ${typeClass}">${escapeHtml(gw.type)}</span>
+                                <span class="gateway-node">${escapeHtml(gw.node)}</span>
+                            </div>
+                            <div class="gateway-status">
+                                <span class="status-indicator ${statusClass}"></span>
+                                <span class="gateway-action ${actionClass}">${actionLabel}</span>
+                            </div>
+                            <div class="gateway-details">
+                                <div class="gateway-detail-row">
+                                    <span class="gateway-detail-label">Target:</span>
+                                    <span class="gateway-detail-value">${escapeHtml(targetLabel)}</span>
+                                </div>
+                                <div class="gateway-detail-row">
+                                    <span class="gateway-detail-label">Reason:</span>
+                                    <span class="gateway-detail-value">${escapeHtml(reasonLabel)}</span>
+                                </div>
+                            </div>
+                            <div class="gateway-timestamp">${escapeHtml(timestampLabel)}</div>
+                        </div>
+                    `;
+                });
+                grid.innerHTML = gridHtml;
+
+                // Genera log (ultimi 20 eventi)
+                const sortedLog = [...gateways]
+                    .filter(gw => gw.timestamp)
+                    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+                    .slice(0, 20);
+
+                if (sortedLog.length > 0) {
+                    let logHtml = '<h4>Recent Events</h4>';
+                    sortedLog.forEach(gw => {
+                        let tsLabel = '-';
+                        try {
+                            const ts = new Date(gw.timestamp);
+                            tsLabel = ts.toLocaleString('it-IT');
+                        } catch(e) {
+                            tsLabel = gw.timestamp;
+                        }
+                        const actionClass = gw.action === 'linked' ? 'linked' :
+                                           gw.action === 'linking' ? 'linking' : 'unlinked';
+                        const targetLabel = gw.talkgroup || gw.repeater || gw.reason || '-';
+                        
+                        logHtml += `
+                            <div class="gateway-log-entry">
+                                <span class="gateway-log-time">${escapeHtml(tsLabel)}</span>
+                                <span class="gateway-log-node">${escapeHtml(gw.node)}</span>
+                                <span class="gateway-log-action ${actionClass}">${escapeHtml(gw.action || 'unknown')}</span>
+                                <span class="gateway-log-reason">${escapeHtml(targetLabel)}</span>
+                            </div>
+                        `;
+                    });
+                    log.innerHTML = logHtml;
+                } else {
+                    log.innerHTML = '';
+                }
+
+            } catch (error) {
+                console.error("Errore nel caricamento gateway status:", error);
+            }
+        }
+
+        setInterval(loadGatewayStatus, 3000);
         setInterval(loadData, 1000);
         setInterval(updateLiveTimers, 1000);
         loadData();
+        loadGatewayStatus();
     </script>
 
 </body>

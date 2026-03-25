@@ -17,15 +17,35 @@ if os.path.exists(".env"):
                     os.environ[parts[0].strip()] = parts[1].strip()
 
 # --- CONFIG ---
+DEFAULT_TOPICS = [
+    "mmdvm/+/json",
+    "p25-gateway/+/json",
+    "nxdn-gateway/+/json",
+    "dmr-gateway/+/json",
+    "dstar-gateway/+/json",
+    "ysf-gateway/+/json"
+]
+
+env_topics_str = os.environ.get("MQTT_TOPICS", "")
+if env_topics_str:
+    MQTT_TOPICS = [t.strip() for t in env_topics_str.split(",") if t.strip()]
+else:
+    env_topic = os.environ.get("MQTT_TOPIC", "")
+    if env_topic:
+        MQTT_TOPICS = [env_topic] + [t for t in DEFAULT_TOPICS if t != "mmdvm/+/json"]
+    else:
+        MQTT_TOPICS = DEFAULT_TOPICS
+
 MQTT_CONFIG = {
     "broker": os.environ.get("MQTT_BROKER"),
     "port": int(os.environ.get("MQTT_PORT", 1883)),
-    "topic": os.environ.get("MQTT_TOPIC", "mmdvm/+/json"),
+    "topics": MQTT_TOPICS,
     "user": os.environ.get("MQTT_USER"),
     "pass": os.environ.get("MQTT_PASS")
 }
 
-DB_PATH = "dashboard.db"
+from pathlib import Path
+DB_PATH = str(Path(__file__).parent / "dashboard.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -45,7 +65,14 @@ def init_db():
         c.execute("ALTER TABLE calls ADD COLUMN country TEXT")
         print("DEBUG: Colonne city/country aggiunte alla tabella calls.")
     except sqlite3.OperationalError:
-        # Le colonne esistono già
+        pass
+    
+    # Migrazione per source_type
+    try:
+        c.execute("ALTER TABLE calls ADD COLUMN source_type TEXT DEFAULT 'MMDVM'")
+        print("DEBUG: Colonna source_type aggiunta alla tabella calls.")
+    except sqlite3.OperationalError:
+        pass
         pass
 
     try:
@@ -78,8 +105,10 @@ def init_db():
 
 init_db()
 
-calls = []  # Compatibilità temporanea o cache veloce
+calls = []
 calls_lock = threading.Lock()
+gateway_status = {}  # {node_name: {type, action, reason, talkgroup, repeater, timestamp}}
+gateway_lock = threading.Lock()
 user_map, nxdn_map, callsign_map, tg_map = {}, {}, {}, {}
 
 def format_ber(val):
@@ -196,50 +225,50 @@ def load_databases():
             print(f"Errore caricamento {tg_path}: {e}")
 
 def get_user_info(radio_id, mode):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
     table = "nxdn_users" if mode == "NXDN" else "users"
-    c.execute(f"SELECT callsign, name, city, country FROM {table} WHERE radio_id=?", (radio_id,))
-    res = c.fetchone()
-    conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute(f"SELECT callsign, name, city, country FROM {table} WHERE radio_id=?", (radio_id,))
+        res = c.fetchone()
     return res if res else (radio_id, "Unknown", "", "")
 
 def get_callsign_info(callsign):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT name, city, country FROM users WHERE callsign=?", (callsign,))
-    res = c.fetchone()
-    conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("SELECT name, city, country FROM users WHERE callsign=?", (callsign,))
+        res = c.fetchone()
     return res if res else (None, "", "")
 
 def save_or_update_call(call_data):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Se è un aggiornamento (fine chiamata)
-    if call_data.get("TIME") != "":
-        c.execute('''UPDATE calls SET duration=?, ber=? 
-                     WHERE mode=? AND slot=? AND start_ts=?''',
-                  (call_data["TIME"], call_data["BER"], 
-                   call_data["MODE"], call_data["SLOT"], call_data["start_ts"]))
-    else:
-        # Nuova chiamata
-        c.execute('''INSERT INTO calls 
-                     (from_type, id_raw, callsign, name, city, country, tg, mode, slot, nodo, ber, data, orario, start_ts, duration, source_ext, lat, lon)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (call_data["FROM"], call_data["id_raw"], call_data["ID"], call_data["NAME"], 
-                   call_data.get("CITY", ""), call_data.get("COUNTRY", ""),
-                   call_data["TG"], call_data["MODE"], call_data["SLOT"], call_data["NODO"],
-                   call_data["BER"], call_data["DATA"], call_data["ORARIO"], call_data["start_ts"], "",
-                   call_data.get("SOURCE_EXT", ""), call_data.get("LAT"), call_data.get("LON")))
-    
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        if call_data.get("TIME") != "":
+            c.execute('''UPDATE calls SET duration=?, ber=? 
+                         WHERE mode=? AND slot=? AND start_ts=?''',
+                      (call_data["TIME"], call_data["BER"], 
+                       call_data["MODE"], call_data["SLOT"], call_data["start_ts"]))
+        else:
+            c.execute("SELECT id FROM calls WHERE mode=? AND slot=? AND start_ts=?", 
+                      (call_data["MODE"], call_data["SLOT"], call_data["start_ts"]))
+            existing = c.fetchone()
+            if existing:
+                c.execute("UPDATE calls SET ber=? WHERE id=?", (call_data["BER"], existing[0]))
+            else:
+                c.execute('''INSERT INTO calls 
+                             (from_type, id_raw, callsign, name, city, country, tg, mode, slot, nodo, ber, data, orario, start_ts, duration, source_ext, lat, lon, source_type)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                           (call_data["FROM"], call_data["id_raw"], call_data["ID"], call_data["NAME"], 
+                            call_data.get("CITY", ""), call_data.get("COUNTRY", ""),
+                            call_data["TG"], call_data["MODE"], call_data["SLOT"], call_data["NODO"],
+                            call_data["BER"], call_data["DATA"], call_data["ORARIO"], call_data["start_ts"], "",
+                            call_data.get("SOURCE_EXT", ""), call_data.get("LAT"), call_data.get("LON"),
+                            call_data.get("SOURCE_TYPE", "MMDVM")))
+        conn.commit()
 
 def get_recent_calls(limit=40):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''SELECT from_type, id_raw, callsign, name, city, country, tg, mode, slot, nodo, ber, data, orario, duration, start_ts, source_ext, lat, lon 
+    c.execute('''SELECT from_type, id_raw, callsign, name, city, country, tg, mode, slot, nodo, ber, data, orario, duration, start_ts, source_ext, lat, lon, source_type 
                  FROM calls ORDER BY id DESC LIMIT ?''', (limit,))
     rows = c.fetchall()
     conn.close()
@@ -252,121 +281,127 @@ def get_recent_calls(limit=40):
             "TG": r[6], "MODE": r[7], "SLOT": r[8], "NODO": r[9],
             "BER": r[10], "DATA": r[11], "ORARIO": r[12], "TIME": r[13],
             "start_ts": r[14], "SOURCE_EXT": r[15] or "",
-            "LAT": r[16], "LON": r[17]
+            "LAT": r[16], "LON": r[17],
+            "SOURCE_TYPE": r[18] if len(r) > 18 else "MMDVM"
         })
     return results
 
+
+def handle_link_status_message(topic, data, mode, now_ts):
+    topic_parts = topic.split('/')
+    if len(topic_parts) < 1: return
+    
+    topic_prefix = topic_parts[0] if topic_parts[0] else ""
+    gw_types = {"dstar": "DSTAR", "nxdn": "NXDN", "p25": "P25", "ysf": "YSF", "dmr": "DMR"}
+    gw_type = next((v for k, v in gw_types.items() if k in topic_prefix.lower()), 
+                   ("MMDVM" if topic_prefix.startswith("mmdvm") else topic_prefix.upper().replace("-GATEWAY", "")))
+    
+    node_name = topic_parts[1] if len(topic_parts) >= 2 else "N/A"
+    link_action = data.get("action", "unknown")
+    link_reason = data.get("reason", "")
+    link_tg = data.get("talkgroup") or data.get("reflector") or ""
+    link_repeater = data.get("repeater") or ""
+    link_timestamp = data.get("timestamp") or ""
+    
+    if mode == "status":
+        link_action = "online"
+        link_reason = data.get("message", "")
+    
+    with gateway_lock:
+        gateway_status[node_name] = {
+            "type": gw_type, "node": node_name, "action": link_action, "reason": link_reason,
+            "talkgroup": str(link_tg) if link_tg else "", "repeater": link_repeater,
+            "timestamp": link_timestamp, "updated": now_ts
+        }
+
+def handle_call_start(topic, data, mode, slot, now_ts):
+    topic_parts = topic.split('/')
+    node_name = topic_parts[1] if len(topic_parts) >= 2 else "N/A"
+    source_type = "MMDVM" if topic.startswith("mmdvm/") else "GATEWAY"
+    src_id_raw = str(data.get("source_id") or data.get("src_id") or data.get("radio_id") or "")
+    src_call_raw = data.get("source_cs") or data.get("src_callsign") or data.get("callsign") or ""
+    
+    uid = src_call_raw if (mode.upper() in ["YSF", "D-STAR"] or not src_id_raw) else src_id_raw
+    
+    with calls_lock:
+        if any(c["id_raw"] == uid and c["TIME"] == "" and (now_ts - c["start_ts"]) < 2 for c in calls):
+            return
+
+    callsign = src_call_raw.upper().strip()
+    name, city, country = f"{mode} User", "", ""
+    lookup_call = callsign
+    for sfx in ["-RPT", "-G", "-L"]:
+        if lookup_call.endswith(sfx):
+            lookup_call = lookup_call[:-len(sfx)]; break
+    
+    if mode.upper() in ["YSF", "D-STAR"]:
+        db_res = get_callsign_info(lookup_call)
+        if db_res[0]: name, city, country = db_res
+        elif src_id_raw:
+            callsign_db, name_db, city_db, country_db = get_user_info(src_id_raw, mode)
+            if callsign_db != src_id_raw: callsign, name, city, country = callsign_db, name_db, city_db, country_db
+    else:
+        callsign, name, city, country = get_user_info(src_id_raw, mode)
+
+    tg_id = str(data.get("reflector") or data.get("destination_id") or data.get("dg-id") or 
+                data.get("destination_cs") or data.get("tg") or data.get("talkgroup") or "N/A").strip()
+    tg_label = tg_map.get(tg_id, "")
+    target = f"{tg_id} ({tg_label})" if tg_label else tg_id
+    source_ext = data.get("source_ext", "") if mode.upper() == "D-STAR" else ""
+
+    new_call = {
+        "FROM": (data.get("source") or data.get("from") or "NET").upper(),
+        "id_raw": uid, "ID": callsign, "NAME": name, "CITY": city, "COUNTRY": country,
+        "TG": target, "MODE": mode, "SLOT": slot, "NODO": node_name, 
+        "BER": format_ber(data.get("ber") or data.get("BER")), "DATA": time.strftime("%d-%m-%Y"),
+        "ORARIO": time.strftime("%H:%M:%S"), "TIME": "", "start_ts": now_ts,
+        "SOURCE_EXT": source_ext, "LAT": data.get("lat") or data.get("latitude"),
+        "LON": data.get("lon") or data.get("longitude") or data.get("lng"), "SOURCE_TYPE": source_type
+    }
+    
+    with calls_lock:
+        calls.append(new_call)
+        if len(calls) > 40: calls.pop(0)
+    save_or_update_call(new_call)
+
+def handle_call_end_or_update(mode, slot, data, now_ts, action):
+    with calls_lock:
+        for c in reversed(calls):
+            if c["MODE"] == mode and c["TIME"] == "" and (mode != "DMR" or c["SLOT"] == slot):
+                if action in ["end", "lost", "watchdog", "timeout"]:
+                    json_dur = data.get("duration")
+                    try:
+                        val_dur = round(float(json_dur), 1) if json_dur is not None else round(now_ts - c["start_ts"], 1)
+                    except:
+                        val_dur = round(now_ts - c["start_ts"], 1)
+                    c["TIME"] = f"{val_dur}!" if action == "lost" else val_dur
+                
+                ber_val = data.get("ber") or data.get("BER")
+                if ber_val is not None:
+                    c["BER"] = format_ber(ber_val)
+                save_or_update_call(c)
+                break
+
 def on_message(client, userdata, msg):
-    global calls
     try:
-        topic = msg.topic
-        payload_str = msg.payload.decode("utf-8", errors="ignore")
-        raw_data = json.loads(payload_str)
-        mode = list(raw_data.keys())[0]
-        data = raw_data[mode]
+        payload = json.loads(msg.payload.decode("utf-8", errors="ignore"))
+        mode = list(payload.keys())[0]
+        data = payload[mode]
         action = data.get("action")
         slot = data.get("slot", "-")
         now_ts = time.time()
 
-        if action == "start":
-            topic_parts = topic.split('/')
-            node_name = topic_parts[1] if len(topic_parts) >= 2 else "N/A"
-            src_id_raw = str(data.get("source_id", ""))
-            src_call_raw = data.get("source_cs", "")
-            
-            uid = src_call_raw if (mode.upper() in ["YSF", "D-STAR"] or not src_id_raw) else src_id_raw
-            
-            with calls_lock:
-                if any(c["id_raw"] == uid and c["TIME"] == "" and (now_ts - c["start_ts"]) < 2 for c in calls):
-                    return
-
-            callsign = src_call_raw.upper().strip()
-            name = f"{mode} User"
-            city, country = "", ""
-            
-            lookup_call = callsign
-            for sfx in ["-RPT", "-G", "-L"]:
-                if lookup_call.endswith(sfx):
-                    lookup_call = lookup_call[:-len(sfx)]
-                    break
-            
-            if mode.upper() in ["YSF", "D-STAR"]:
-                db_res = get_callsign_info(lookup_call)
-                if db_res[0]:
-                    name, city, country = db_res
-                elif src_id_raw:
-                    callsign_db, name_db, city_db, country_db = get_user_info(src_id_raw, mode)
-                    if callsign_db != src_id_raw:
-                        callsign, name, city, country = callsign_db, name_db, city_db, country_db
-            else:
-                callsign, name, city, country = get_user_info(src_id_raw, mode)
-
-            tg_id = data.get("reflector") or data.get("destination_id") or data.get("dg-id") or data.get("destination_cs") or "N/A"
-            tg_id = str(tg_id).strip()
-            tg_label = tg_map.get(tg_id, "")
-            target = f"{tg_id} ({tg_label})" if tg_label else tg_id
-
-            # Estrai source_ext solo per D-STAR
-            source_ext = data.get("source_ext", "") if mode.upper() == "D-STAR" else ""
-
-            new_call = {
-                "FROM": data.get("source", "NET").upper(),
-                "id_raw": uid,
-                "ID": callsign,
-                "NAME": name,
-                "CITY": city,
-                "COUNTRY": country,
-                "TG": target,
-                "MODE": mode,
-                "SLOT": slot,
-                "NODO": node_name,
-                "BER": format_ber(data.get("ber")),
-                "DATA": time.strftime("%d-%m-%Y"),
-                "ORARIO": time.strftime("%H:%M:%S"),
-                "TIME": "",
-                "start_ts": now_ts,
-                "SOURCE_EXT": source_ext,
-                "LAT": data.get("lat") or data.get("latitude"),
-                "LON": data.get("lon") or data.get("longitude") or data.get("lng")
-            }
-            
-            with calls_lock:
-                calls.append(new_call)
-                if len(calls) > 40: calls.pop(0)
-            
-            save_or_update_call(new_call)
-
-        elif action in ["end", "lost", "watchdog", "timeout"]:
-            with calls_lock:
-                for c in reversed(calls):
-                    if c["MODE"] == mode and c["TIME"] == "":
-                        if mode != "DMR" or c["SLOT"] == slot:
-                            json_dur = data.get("duration")
-                            try:
-                                val_dur = round(float(json_dur), 1) if json_dur is not None else round(now_ts - c["start_ts"], 1)
-                            except (ValueError, TypeError):
-                                val_dur = round(now_ts - c["start_ts"], 1)
-                            c["TIME"] = val_dur
-                            if action == "lost": c["TIME"] = f"{c['TIME']}!" 
-                            if "ber" in data:
-                                c["BER"] = format_ber(data["ber"])
-                            
-                            save_or_update_call(c)
-                            break
-        
+        if mode in ["link", "status"]:
+            handle_link_status_message(msg.topic, data, mode, now_ts)
+        elif action == "start":
+            handle_call_start(msg.topic, data, mode, slot, now_ts)
         else:
-            with calls_lock:
-                for c in reversed(calls):
-                    if c["MODE"] == mode and c["TIME"] == "":
-                        if mode != "DMR" or c["SLOT"] == slot:
-                            if "ber" in data:
-                                c["BER"] = format_ber(data["ber"])
-                                save_or_update_call(c)
-                            break
-
+            handle_call_end_or_update(mode, slot, data, now_ts, action)
     except Exception as e:
-        err_mode = mode if 'mode' in locals() else 'JSON'
-        print(f"Errore parsing {err_mode}: {e}")
+        print(f"Errore parsing: {e}")
+def get_gateway_status():
+    with gateway_lock:
+        return list(gateway_status.values())
 
 def start_mqtt():
     load_databases()
@@ -379,8 +414,10 @@ def start_mqtt():
     client.username_pw_set(MQTT_CONFIG["user"], MQTT_CONFIG["pass"])
     def on_connect(c, u, f, rc):
         if rc == 0:
-            print(f"Connesso con successo al broker MQTT. Iscrizione al topic: {MQTT_CONFIG['topic']}")
-            c.subscribe(MQTT_CONFIG["topic"])
+            print(f"Connesso con successo al broker MQTT. Iscrizione ai topic:")
+            for topic in MQTT_CONFIG["topics"]:
+                print(f"  - {topic}")
+                c.subscribe(topic)
         else:
             print(f"Connessione MQTT fallita (codice rc={rc})")
             

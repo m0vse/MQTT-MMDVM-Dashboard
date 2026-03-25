@@ -3,32 +3,12 @@ import threading
 import mqtt_parser
 import os
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=".", static_url_path="")
 
 
 @app.route("/")
 def index():
     return send_file("index.html")
-
-
-@app.route("/style.css")
-def style():
-    return send_file("style.css")
-
-
-@app.route("/manifest.json")
-def manifest():
-    return send_file("manifest.json")
-
-
-@app.route("/sw.js")
-def sw():
-    return send_file("sw.js")
-
-
-@app.route("/icons/<path:path>")
-def icons(path):
-    return send_from_directory("icons", path)
 
 
 @app.route("/data")
@@ -37,6 +17,11 @@ def data():
 
     current_calls = mqtt_parser.get_recent_calls(limit=40)
     return jsonify({"server_time": time.time(), "calls": current_calls})
+
+
+@app.route("/gateway_status")
+def gateway_status():
+    return jsonify({"gateways": mqtt_parser.get_gateway_status()})
 
 
 @app.route("/clear", methods=["POST"])
